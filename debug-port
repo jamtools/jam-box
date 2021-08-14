@@ -1,0 +1,3 @@
+# bin/sh
+
+ssh -t -L 9229:127.0.0.1:9229 pi@raspberrypi.local -q
