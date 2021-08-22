@@ -1,10 +1,12 @@
-export type MidiInstrument = {
-    name: string;
-};
+export type MidiDeviceInfo = {
+    portNumber: string;
+    clientName: string;
+    portName: string;
+}
 
 export interface MidiInterface {
-    getActiveMidiInstruments(): MidiInstrument[];
-    record(): void;
-    finishRecording(): void;
-    isRecordingMidi(): boolean;
+    getActiveMidiInstruments(): Promise<MidiDeviceInfo[]>;
+    record(device: MidiDeviceInfo, fileName: string): void;
+    finishRecording(): Promise<void>;
+    isRecordingMidi(): Promise<boolean>;
 };

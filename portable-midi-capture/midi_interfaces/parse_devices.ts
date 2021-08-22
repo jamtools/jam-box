@@ -1,8 +1,4 @@
-export type MidiDeviceInfo = {
-    portNumber: string;
-    clientName: string;
-    portName: string;
-}
+import {MidiDeviceInfo} from './midi-interface';
 
 export const getMidiDevices = (s: string): MidiDeviceInfo[] => {
     s = s.trim();
