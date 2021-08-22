@@ -1,0 +1,1 @@
+ps aux | grep $* | grep -v grep | python -c "import sys; line = list(sys.stdin)[0]; line = filter(lambda x: x, line.split(' ')); pid = line[1]; print(pid)"
