@@ -13,26 +13,68 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func main() {
-	ch := make(chan string)
-
-	go StartServer(ch)
-
-	for {
-		c := <-ch
-		fmt.Println(c)
-	}
+type UIState struct {
+	Title   string
+	Body    string
+	Buttons []string
 }
 
-func StartServer(ch chan string) {
+var enabled = false
+
+func toggleSomething() {
+	enabled = !enabled
+}
+
+func main() {
 	_, err := loadState()
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	ch := make(chan string)
+
+	var getState = func() State {
+		return State{Enabled: enabled}
+	}
+
+	var getUIState = func() UIState {
+		state := getState()
+		return UIState{
+			Title:   "Toggle the thing",
+			Body:    fmt.Sprintf("Enabled: %v", state.Enabled),
+			Buttons: []string{"Toggle", "Do something else"},
+		}
+	}
+
+	var clicked = func(btn string) {
+		defer saveState(getState())
+
+		if btn == "0" {
+			toggleSomething()
+		}
+	}
+
+	s := &Server{}
+	go s.StartServer(clicked, getUIState)
+
+	for {
+		buttonClicked := <-ch
+		fmt.Println(buttonClicked)
+	}
+}
+
+type Server struct {
+	clicked    func(btn string)
+	getUIState func() UIState
+}
+
+func (s *Server) StartServer(clicked func(btn string), getUIState func() UIState) {
+	s.clicked = clicked
+	s.getUIState = getUIState
+
 	r := mux.NewRouter()
-	r.HandleFunc("/", handleRoot)
-	r.HandleFunc("/submit", handleSubmit(ch))
+	r.HandleFunc("/", s.handleRoot)
+	r.HandleFunc("/submit", s.handleSubmit)
 
 	srv := &http.Server{
 		Handler:      r,
@@ -44,99 +86,78 @@ func StartServer(ch chan string) {
 	log.Fatal(srv.ListenAndServe())
 }
 
-func handleRoot(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
 
-	s := renderUI()
-	fmt.Fprint(w, s)
+	ui := s.renderUI()
+	fmt.Fprint(w, ui)
 }
 
-func handleSubmit(ch chan string) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		defer saveState()
-		defer refreshUI()
+func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
+	defer s.refreshUI()
 
-		webButtonID := r.URL.Query().Get("id")
-		if webButtonID == "1" {
-			toggleSomething()
-			ch <- webButtonID
-		}
+	webButtonID := r.URL.Query().Get("id")
+	s.clicked(webButtonID)
 
-		s := renderUI()
-		fmt.Fprint(w, s)
-	}
+	ui := s.renderUI()
+	fmt.Fprint(w, ui)
 }
 
-var enabled = false
-
-func toggleSomething() {
-	enabled = !enabled
+func (s *Server) refreshUI() {
+	ui := s.renderUI()
+	s.sendToAllWebsockets(ui)
 }
 
-func refreshUI() {
-	s := renderUI()
-	sendToAllWebsockets(s)
-}
-
-func sendToAllWebsockets(s string) {
+func (s *Server) sendToAllWebsockets(ui string) {
 
 }
-
-var midiDeviceHTMLTemplate = template.Must(template.New("").Parse(`
-	<select>
-	{{range $device := .MidiDevices}}
-		<option
-			value="{{$device.Name}}"
-		>
-			{{$device.Name}}
-		</option>
-	{{end}}
-	</select>
-`))
 
 const jsScript = `
 <script>
-(() => {
-	if (!window.loaded) {
-		window.addEventListener('load', () => {
-			document.querySelector('form').addEventListener('submit', handleFormSubmit);
-		});
-		window.loaded = true;
-	}
-
+	(() => {
 		const handleFormSubmit = (e) => {
 			e.preventDefault();
 			console.log(e);
 
-			fetch(e.target.action + '?id=1', {
+			fetch('/submit?id=' + e.target.id, {
 				method: 'POST',
 			}).then(r => r.text()).then(text => {
 				document.body.innerHTML = text;
-				document.querySelector('form').addEventListener('submit', handleFormSubmit);
+				addListeners();
 			});
 		};
+
+		const addListeners = () => {
+			Array.from(document.querySelectorAll('button')).forEach(b => b.addEventListener('click', handleFormSubmit));
+		}
+
+		if (!window.loaded) {
+			window.addEventListener('load', addListeners);
+			window.loaded = true;
+		}
 	})();
 </script>
 `
 
 var webTemplate = template.Must(template.New("").Parse(fmt.Sprintf(`
-			<h1>{{.State}}</h1>
-			<form action='/submit'>
-				<input id="1" type='submit'>
-			</form>
+			<h1>{{.State.Title}}</h1>
+			<h1>{{.State.Body}}</h1>
+			{{range $i, $btn := .State.Buttons}}
+				<button id="{{$i}}" type='button'>{{$btn}}</button>
+			{{end}}
 
 			%s
 `, jsScript)))
 
-func renderUI() string {
+func (s *Server) renderUI() string {
 	type Data struct {
-		State string
+		State UIState
 	}
 
-	state := fmt.Sprintf("%v", enabled)
+	uiState := s.getUIState()
 
 	var b bytes.Buffer
-	webTemplate.Execute(&b, Data{State: state})
+	webTemplate.Execute(&b, Data{uiState})
 
 	return b.String()
 }
@@ -147,8 +168,8 @@ type State struct {
 
 const stateFileName = "state.json"
 
-func saveState() error {
-	state := State{Enabled: enabled}
+func saveState(state State) error {
+	// state := State{Enabled: enabled}
 	b, err := json.Marshal(state)
 	if err != nil {
 		return err
