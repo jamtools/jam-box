@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -31,8 +30,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ch := make(chan string)
-
 	var getState = func() State {
 		return State{Enabled: enabled}
 	}
@@ -46,21 +43,21 @@ func main() {
 		}
 	}
 
-	var clicked = func(btn string) {
-		defer saveState(getState())
+	s := &Server{}
 
+	var clicked = func(btn string) {
+		defer func() {
+			s.RefreshUI()
+			saveState(getState())
+		}()
+
+		// this can be used to simulate foot pedal presses
 		if btn == "0" {
 			toggleSomething()
 		}
 	}
 
-	s := &Server{}
-	go s.StartServer(clicked, getUIState)
-
-	for {
-		buttonClicked := <-ch
-		fmt.Println(buttonClicked)
-	}
+	s.StartServer(clicked, getUIState)
 }
 
 type Server struct {
@@ -76,12 +73,16 @@ func (s *Server) StartServer(clicked func(btn string), getUIState func() UIState
 	r.HandleFunc("/", s.handleRoot)
 	r.HandleFunc("/submit", s.handleSubmit)
 
+	addr := "127.0.0.1:8000"
+
 	srv := &http.Server{
 		Handler:      r,
-		Addr:         "127.0.0.1:8000",
+		Addr:         addr,
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
+
+	fmt.Println("http://" + addr)
 
 	log.Fatal(srv.ListenAndServe())
 }
@@ -94,8 +95,6 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
-	defer s.refreshUI()
-
 	webButtonID := r.URL.Query().Get("id")
 	s.clicked(webButtonID)
 
@@ -103,7 +102,7 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, ui)
 }
 
-func (s *Server) refreshUI() {
+func (s *Server) RefreshUI() {
 	ui := s.renderUI()
 	s.sendToAllWebsockets(ui)
 }
@@ -111,43 +110,6 @@ func (s *Server) refreshUI() {
 func (s *Server) sendToAllWebsockets(ui string) {
 
 }
-
-const jsScript = `
-<script>
-	(() => {
-		const handleFormSubmit = (e) => {
-			e.preventDefault();
-			console.log(e);
-
-			fetch('/submit?id=' + e.target.id, {
-				method: 'POST',
-			}).then(r => r.text()).then(text => {
-				document.body.innerHTML = text;
-				addListeners();
-			});
-		};
-
-		const addListeners = () => {
-			Array.from(document.querySelectorAll('button')).forEach(b => b.addEventListener('click', handleFormSubmit));
-		}
-
-		if (!window.loaded) {
-			window.addEventListener('load', addListeners);
-			window.loaded = true;
-		}
-	})();
-</script>
-`
-
-var webTemplate = template.Must(template.New("").Parse(fmt.Sprintf(`
-			<h1>{{.State.Title}}</h1>
-			<h1>{{.State.Body}}</h1>
-			{{range $i, $btn := .State.Buttons}}
-				<button id="{{$i}}" type='button'>{{$btn}}</button>
-			{{end}}
-
-			%s
-`, jsScript)))
 
 func (s *Server) renderUI() string {
 	type Data struct {
